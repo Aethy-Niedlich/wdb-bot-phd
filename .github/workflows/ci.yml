@@ -1,0 +1,31 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: docs pins (advisory pre-gate)
+        continue-on-error: true
+        run: |
+          node -e "const fs=require('fs');['ARCHITECTURE.md','FEATURE-INVENTORY.md','LICENSING-PLAN.md'].forEach(f=>{const p='docs/'+f; if(fs.existsSync(p)) console.log('ok',p); else console.log('WARN missing',p);});"
+
+      - name: docs pins (strict, runs only once docs/ARCHITECTURE.md exists)
+        if: ${{ hashFiles('docs/ARCHITECTURE.md') != '' }}
+        run: |
+          grep -q '@grant        none' docs/ARCHITECTURE.md
+          grep -q 'wdbKeybinds'   docs/ARCHITECTURE.md
+          grep -q 'wdbBotKeybinds' docs/ARCHITECTURE.md
+          grep -q 'wdbBotBrain'   docs/ARCHITECTURE.md
+          grep -q 'safetyLayer runs only on the planner/legacy brain' docs/ARCHITECTURE.md
+
+      - name: assemble (self-skips pre-gate)
+        run: node scripts/build.mjs
+
+      - name: harness (self-skips pre-gate)
+        run: node scripts/test-harness.mjs
