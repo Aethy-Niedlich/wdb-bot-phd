@@ -1,13 +1,4 @@
 #!/usr/bin/env node
-// Original build script — PATH C, DeepSeek. Contains no baseline code.
-//
-// Ordered concatenation of src/NN-*.js parts into dist/wdb-bot.user.js.
-// No bundler, no minifier, no sourcemap — byte-identity of assembled parts
-// is required so mlLib.toString() inside the worker remains valid (Qwen v2 APPROVED).
-//
-// Pre-permission-gate: src/ is empty; exit 0 with a clear message and produce
-// nothing. Post-gate: assemble and pin sha256 + byte count in dist/manifest.json.
-
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -23,7 +14,11 @@ const fail = (m) => { console.error('build: ' + m); process.exit(1); };
 const note = (m) => console.log('build: ' + m);
 
 if (!existsSync(SRC)) { note('no src/ — pre-gate state, nothing to assemble'); process.exit(0); }
-const parts = readdirSync(SRC).filter((n) => /^\d\d-.+\.js$/.test(n)).sort();
+const parts = readdirSync(SRC).filter((n) => /^\d\d-.+\.js$/.test(n)).sort((a, b) => {
+  const na = parseInt(a, 10), nb = parseInt(b, 10);
+  if (na !== nb) return na - nb;
+  return a.localeCompare(b);
+});
 if (parts.length === 0) { note('no src/NN-*.js parts — pre-gate state, nothing to assemble'); process.exit(0); }
 if (parts.length < 2) fail('need >= 2 ordered parts; got ' + parts.join(', '));
 

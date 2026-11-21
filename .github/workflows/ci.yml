@@ -7,6 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with: { fetch-depth: 2 }
       - uses: actions/setup-node@v5
         with: { node-version: '24' }
 
@@ -26,8 +27,28 @@ jobs:
           grep -q 'safetyLayer runs only on the planner/legacy brain' docs/ARCHITECTURE.md || (echo "FAIL: missing 'safetyLayer runs only on the planner/legacy brain'" && exit 1)
           echo "All docs pins passed."
 
-      - name: assemble (self-skips pre-gate)
+      - name: node --check (H1)
+        run: node --check scripts/build.mjs && node --check scripts/test-harness.mjs && node --check scripts/manifest.mjs
+
+      - name: enforce NOTES.md on real-row changes
+        run: |
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            CHANGED=$(git diff --name-only HEAD^ HEAD)
+            if echo "$CHANGED" | grep -q 'brains/MANIFEST.json'; then
+              if git diff HEAD^ HEAD -- brains/MANIFEST.json | grep -q '^+.*"class": "real"'; then
+                if ! echo "$CHANGED" | grep -q 'brains/NOTES.md'; then
+                  echo "ERROR: Added/changed a real manifest row without updating brains/NOTES.md"
+                  exit 1
+                fi
+              fi
+            fi
+          fi
+
+      - name: manifest pre-banner check (H4/B3)
+        run: node scripts/manifest.mjs --check
+
+      - name: assemble
         run: node scripts/build.mjs
 
-      - name: harness (self-skips pre-gate)
+      - name: harness
         run: node scripts/test-harness.mjs

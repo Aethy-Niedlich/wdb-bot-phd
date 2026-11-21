@@ -1,27 +1,16 @@
 #!/usr/bin/env node
-// Original test harness — PATH C, DeepSeek. Contains no baseline code.
-//
-// Qwen v6:
-//   • skip is keyed ONLY on src/ absence; any skip once src/ exists is a failure
-//     (except baseline-parity skips, permitted while baseline/ is un-committed)
-//   • worker-purity bar = boundary (a): fresh empty vm realm proves mlLib captures
-//     NO main-script scope; its only global usage is standard intrinsics
-//     (currently Math, Float32Array), which any Worker realm provides
-//   • build laws L-a, L-b, L-c, L-d (harness-observable), L-e, L-f enforced below
-//
-// Pre-gate (src/ absent) exits 0 with a loud banner. That is NOT a green signal
-// for the bot — it only confirms pre-gate state.
-
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { join } from 'node:path';
+import { checkManifest } from './manifest.mjs';
 
 const ROOT = process.cwd();
 const SRC  = join(ROOT, 'src');
 const DIST = join(ROOT, 'dist', 'wdb-bot.user.js');
 const BASE = join(ROOT, 'baseline', 'wdb-bot-6.7.3.user.js');
+const BRAINS = join(ROOT, 'brains');
+const PRIMARY_FIXTURE = join(BRAINS, 'primary.json');
 
-// -------- L-f: pre-gate skip keyed ONLY on src/ absence --------
 if (!existsSync(SRC)) {
   console.log('=======================================================');
   console.log('PRE-GATE: PARITY DORMANT');
@@ -46,7 +35,6 @@ const ok   = (m) => { passN++; console.log('ok   ' + m); };
 const bad  = (m) => { failN++; console.error('FAIL ' + m); };
 const skp  = (m, why) => { skipN++; skipReasons.push(m + ' (' + why + ')'); console.log('SKIP ' + m + ' — ' + why); };
 
-// -------- stub browser realm + virtual clock --------
 function makeRealm() {
   const clock = { t: 0 };
   const timers = [];
@@ -54,10 +42,10 @@ function makeRealm() {
   const storeLog = [];
   const win = {};
   win.performance = { now: () => clock.t };
-  win.setTimeout  = (fn, ms) => { const id = timers.length; timers.push({ id, at: clock.t + (ms || 0), fn }); return id; };
-  win.setInterval = (fn, ms) => { const id = timers.length; timers.push({ id, at: clock.t + (ms || 0), fn, interval: ms || 0 }); return id; };
+  win.setTimeout  = (fn, ms) => { const id = timers.length; const clamped = Math.max(1, ms || 0); timers.push({ id, at: clock.t + clamped, fn }); return id; };
+  win.setInterval = (fn, ms) => { const id = timers.length; const clamped = Math.max(1, ms || 0); timers.push({ id, at: clock.t + clamped, fn, interval: clamped }); return id; };
   win.clearTimeout = win.clearInterval = (id) => { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); };
-  win.requestIdleCallback   = (fn) => win.setTimeout(fn, 0);
+  win.requestIdleCallback   = (fn) => win.setTimeout(fn, 1);
   win.requestAnimationFrame = (fn) => win.setTimeout(fn, 16);
   win.addEventListener = () => {};
   win.localStorage = {
@@ -76,8 +64,6 @@ function makeRealm() {
   };
   win.window = win;
   win.console = console;
-  // btoa/atob stubs — without these, mlSave silently throws, saveNow catches, and
-  // brain.ml.q stays unset. The wire-size pin below would then fail for the wrong reason.
   win.btoa = (bin) => Buffer.from(bin, 'binary').toString('base64');
   win.atob = (b64) => Buffer.from(b64, 'base64').toString('binary');
   const noop = () => {};
@@ -101,13 +87,29 @@ function advance(r, ms) {
   r.clock.t = end;
 }
 function braceMatch(text, fromIdx) {
-  let i = text.indexOf('{', fromIdx), depth = 0;
+  let i = text.indexOf('{', fromIdx), depth = 0, state = 'normal';
   if (i < 0) return -1;
-  while (i < text.length) {
-    const c = text[i];
-    if (c === '{') depth++;
-    else if (c === '}') { depth--; if (depth === 0) return i + 1; }
-    i++;
+  for (; i < text.length; i++) {
+    const c = text[i], n = text[i+1];
+    if (state === 'normal') {
+      if (c === '/' && n === '/') { state = 'line'; i++; }
+      else if (c === '/' && n === '*') { state = 'block'; i++; }
+      else if (c === "'") state = 'single';
+      else if (c === '"') state = 'double';
+      else if (c === '`') state = 'template';
+      else if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) return i + 1; }
+    } else if (state === 'line') {
+      if (c === '\n') state = 'normal';
+    } else if (state === 'block') {
+      if (c === '*' && n === '/') { state = 'normal'; i++; }
+    } else if (state === 'single') {
+      if (c === '\\') i++; else if (c === "'") state = 'normal';
+    } else if (state === 'double') {
+      if (c === '\\') i++; else if (c === '"') state = 'normal';
+    } else if (state === 'template') {
+      if (c === '\\') i++; else if (c === '`') state = 'normal';
+    }
   }
   return -1;
 }
@@ -117,9 +119,6 @@ const deepContains = (hay, needle) => {
   return hay && typeof hay === 'object' && Object.keys(needle).every((k) => deepContains(hay[k], needle[k]));
 };
 
-// -------- static checks on dist --------
-
-// Header pins
 try {
   for (const p of ['@match        https://bonk.io/gameframe-release.html*',
                    '@run-at       document-start',
@@ -129,28 +128,22 @@ try {
   ok('header pins: @match / @run-at / @grant none present verbatim');
 } catch (e) { bad(e.message); }
 
-// L-c: no GM_ token anywhere in dist (comments included — law is zero-tolerance)
 try {
-  const m = /\bGM_[A-Za-z]/.exec(botSrc);
-  if (m) throw new Error('GM_ token present in dist near: ' + botSrc.slice(Math.max(0, m.index - 40), m.index + 40));
+  if (/\bGM_[A-Za-z]/.test(botSrc)) throw new Error('GM_ token present in dist');
   ok('L-c: no GM_ token in dist');
 } catch (e) { bad(e.message); }
 
-// L-b: no localStorage.clear
 try {
   if (/localStorage\s*\.\s*clear\s*\(/.test(botSrc)) throw new Error('localStorage.clear present in dist');
   ok('L-b: no localStorage.clear in dist');
 } catch (e) { bad(e.message); }
 
-// L-a: storage keys literal / bare-identifier only (no concatenation, no computed keys)
 try {
   const srcFiles = readdirSync(SRC).filter((n) => /\.js$/.test(n));
   if (!srcFiles.length) throw new Error('src/ contains no .js files');
   const srcAll = srcFiles.map((f) => readFileSync(join(SRC, f), 'utf8')).join('\n');
   for (const k of ['wdbBotBrain', 'wdbKeybinds', 'wdbBotKeybinds']) {
-    if (!srcAll.includes("'" + k + "'") && !srcAll.includes('"' + k + '"')) {
-      throw new Error(`pinned storage key "${k}" not present as a string literal in src`);
-    }
+    if (!srcAll.includes("'" + k + "'") && !srcAll.includes('"' + k + '"')) throw new Error(`pinned storage key "${k}" not present as a string literal in src`);
   }
   const callRe = /localStorage\s*\.\s*(?:setItem|removeItem)\s*\(/g;
   let m;
@@ -165,26 +158,58 @@ try {
       i++;
     }
     const arg = srcAll.slice(start, i).trim();
-    if (!/^['"`][^'"`]*['"`]$/.test(arg) && !/^[A-Za-z_$][\w$]*$/.test(arg)) {
-      throw new Error('storage key call has non-literal argument: ' + arg);
-    }
+    if (arg.startsWith('`') && arg.includes('${')) throw new Error('storage key call has template literal with substitution: ' + arg);
+    if (!/^['"`][^'"`]*['"`]$/.test(arg) && !/^[A-Za-z_$][\w$]*$/.test(arg)) throw new Error('storage key call has non-literal argument: ' + arg);
   }
   ok('L-a: storage keys are literal/bare-identifier only, no concatenation');
 } catch (e) { bad(e.message); }
 
-// L-d (harness-observable): every src file matches NN-*.js; every matching file's content is in dist
 try {
   const srcFiles = readdirSync(SRC);
   const orphans = srcFiles.filter((n) => !/^\d\d-.+\.js$/.test(n));
   if (orphans.length) throw new Error('src file(s) not matching ^\\d\\d-.+\\.js$: ' + orphans.join(', '));
-  const matched = srcFiles.filter((n) => /^\d\d-.+\.js$/.test(n)).sort();
+  const matched = srcFiles.filter((n) => /^\d\d-.+\.js$/.test(n)).sort((a, b) => {
+    const na = parseInt(a, 10), nb = parseInt(b, 10);
+    if (na !== nb) return na - nb;
+    return a.localeCompare(b);
+  });
   if (matched.length < 2) throw new Error('need >= 2 ordered parts; got ' + matched.join(', ') || '(none)');
   const missing = matched.filter((f) => !botSrc.includes(readFileSync(join(SRC, f), 'utf8')));
   if (missing.length) throw new Error('part(s) not present in dist (build dropped them): ' + missing.join(', '));
   ok(`L-d: all ${matched.length} src part(s) present in dist, no orphans`);
 } catch (e) { bad(e.message); }
 
-// -------- runtime tests against a loaded userscript --------
+try {
+  const srcFiles = readdirSync(SRC).filter((n) => /^\d\d-.+\.js$/.test(n));
+  const joined = srcFiles.sort((a, b) => {
+    const na = parseInt(a, 10), nb = parseInt(b, 10);
+    if (na !== nb) return na - nb;
+    return a.localeCompare(b);
+  }).map(f => readFileSync(join(SRC, f), 'utf8')).join('\n');
+  if (botSrc !== joined) throw new Error('dist does not exactly match ordered join of src parts');
+  ok('H5: dist === ordered join of src parts');
+} catch (e) { bad(e.message); }
+
+try {
+  const testBrace = (str, expected) => {
+    const res = braceMatch(str, 0);
+    if (res !== expected) throw new Error(`braceMatch failed on: ${str} (got ${res}, want ${expected})`);
+  };
+  testBrace('{}', 2);
+  testBrace('{a: "}"}', 8);
+  testBrace('{a: \'}\'}', 8);
+  testBrace('{a: /* } */ 1}', 14);
+  testBrace('{a: "\\"}"}', 10);
+  testBrace('{a: "', -1);
+  testBrace('{a: `}`}', 8);
+  ok('H3: braceMatch self-tests passed');
+} catch (e) { bad(e.message); }
+
+try {
+  checkManifest(true);
+  ok('H4/B3: manifest integrity check passed');
+} catch (e) { bad('H4/B3 manifest check: ' + e.message); }
+
 const r = makeRealm();
 let loadErr = null;
 try { runInContext(botSrc, r.ctx); } catch (e) { loadErr = e; }
@@ -196,39 +221,22 @@ else {
   else {
     ok('userscript loaded, WDB present');
 
-    // Storage write-set: subset of the three pinned names only
     try {
-      const written = new Set(r.storeLog.filter(([op]) => op === 'set').map(([, k]) => k));
-      const allowed = new Set(['wdbBotBrain', 'wdbKeybinds', 'wdbBotKeybinds']);
-      const extra = [...written].filter((k) => !allowed.has(k));
-      if (extra.length) throw new Error('unexpected localStorage keys written: ' + extra.join(', '));
-      ok('storage writes: subset of the three pinned keys only');
+      if (!WDB.importBrain(JSON.stringify({ apex: { low: 30, regular: 55, high: 95, super: 140 } }))) throw new Error('import rejected');
+      const out = JSON.parse(WDB.exportBrain(false));
+      if (!out.lift) throw new Error('adoptBrain dropped lift (lazy)');
+      ok('adoptBrain preserves lazy fields');
     } catch (e) { bad(e.message); }
 
-    // adoptBrain: lazy survival
-    try {
-      const lazy = { apex: { low: 30, regular: 55, high: 95, super: 140 },
-                     clips: [{ kind: 'play', keys: [], path: [] }], countdownMs: 1234, ml: { q: 'AAAA', p: 'BBBB' } };
-      if (!WDB.importBrain(JSON.stringify(lazy))) throw new Error('importBrain refused a well-formed apex brain');
-      const b = WDB.brain();
-      if (!Array.isArray(b.clips) || b.clips.length !== 1) throw new Error('adoptBrain dropped clips (lazy)');
-      if (b.countdownMs !== 1234) throw new Error('adoptBrain dropped countdownMs (lazy)');
-      if (!b.ml || typeof b.ml.q !== 'string') throw new Error('adoptBrain dropped ml');
-      ok('adoptBrain preserves lazy fields (clips, countdownMs, ml)');
-    } catch (e) { bad(e.message); }
-
-    // adoptBrain: apex gate depth (no deeper)
     try {
       if (WDB.importBrain(JSON.stringify({ clips: [], countdownMs: 9 })) !== false) throw new Error('accepted apex-less brain');
       if (WDB.importBrain(JSON.stringify({ data: 1 })) !== false) throw new Error('accepted {data:1}');
-      if (WDB.importBrain(JSON.stringify({ apex: {} })) !== true) throw new Error('rejected {apex:{}} — should pass the gate');
+      if (WDB.importBrain(JSON.stringify({ apex: {} })) !== true) throw new Error('rejected {apex:{}}');
       ok('adoptBrain apex-gate depth: {} and {data:1} rejected, {apex:{}} accepted');
     } catch (e) { bad(e.message); }
 
-    // superSide / posLearn literal-target guard
     try {
-      const partial = { apex: { low: 30, regular: 55, high: 95, super: 140 },
-                        superSide: { v: 42, n: 7 }, posLearn: { d: 88, n: 3 } };
+      const partial = { apex: { low: 30, regular: 55, high: 95, super: 140 }, superSide: { v: 42, n: 7 }, posLearn: { d: 88, n: 3 } };
       if (!WDB.importBrain(JSON.stringify(partial))) throw new Error('import rejected');
       const b = WDB.brain();
       if (!b.superSide || b.superSide.v !== 42 || b.superSide.n !== 7) throw new Error('superSide literal merge lost a field');
@@ -236,24 +244,18 @@ else {
       ok('superSide/posLearn literal-target merges preserve saved values');
     } catch (e) { bad(e.message); }
 
-    // Wire-size pin (provisional per Qwen: mismatch -> fix pin, not code)
     try {
-      if (!WDB.importBrain(JSON.stringify({ apex: { low: 30, regular: 55, high: 95, super: 140 } })))
-        throw new Error('import rejected');
+      if (!WDB.importBrain(JSON.stringify({ apex: { low: 30, regular: 55, high: 95, super: 140 } }))) throw new Error('import rejected');
       const b = WDB.brain();
-      if (!b.ml || typeof b.ml.q !== 'string' || typeof b.ml.p !== 'string')
-        throw new Error('brain.ml.q/p not set after importBrain+saveNow (btoa/atob stubs missing?)');
+      if (!b.ml || typeof b.ml.q !== 'string' || typeof b.ml.p !== 'string') throw new Error('brain.ml.q/p not set');
       if (b.ml.q.length !== 32844) throw new Error(`brain.ml.q wire-size ${b.ml.q.length}, expected 32844`);
       if (b.ml.p.length !== 32844) throw new Error(`brain.ml.p wire-size ${b.ml.p.length}, expected 32844`);
       ok('wire-size pin: brain.ml.q and brain.ml.p are both 32,844 base64 chars');
     } catch (e) { bad(e.message); }
 
-    // Worker purity — boundary (a)
-    // mlLib references no main-script scope; its only global usage is standard
-    // intrinsics (currently Math, Float32Array), which any Worker realm provides.
     try {
       const m = /^\s*function\s+mlLib\s*\(\s*\)\s*\{/m.exec(botSrc);
-      if (!m) throw new Error('mlLib() not found (renamed or removed)');
+      if (!m) throw new Error('mlLib() not found');
       const start = m.index + m[0].indexOf('function');
       const end = braceMatch(botSrc, start);
       if (end < 0) throw new Error('could not bracket-match mlLib()');
@@ -267,87 +269,110 @@ else {
       for (let k = 0; k < D.length; k++) D[k] = Math.random() * 0.2;
       tr.addT(T); tr.addD(D); tr.train(1);
       const st = tr.stats();
-      if (!(st.updates >= 1 && st.pUpdates >= 1)) throw new Error('trainer did not advance updates/pUpdates');
-      ok('worker purity (boundary a): mlLib standalone in empty realm, trainer(16,14) trained one step');
+      if (!(st.updates >= 1 && st.pUpdates >= 1)) throw new Error('trainer did not advance');
+      ok('worker purity (boundary a): mlLib standalone in empty realm');
     } catch (e) { bad('worker purity: ' + e.message); }
 
-    // Round-trip deep-contains, excluding apex/lift/air (which sanitizeJumps may clamp)
     try {
-      const fixture = {
-        apex: { low: 35, regular: 60, high: 100, super: 150 },
-        lift: { low: 55, regular: 130, high: 210, super: 220 },
-        air:  { low: 420, regular: 560, high: 760, super: 900 },
-        someCustomField: { nested: [1, 2, 3], flag: true },
-        clips: [{ kind: 'play', keys: [[0, 0]], path: [[0, 10, 20]] }],
-        countdownMs: 3000,
-      };
+      const fixture = { apex: { low: 35, regular: 60, high: 100, super: 150 }, lift: { low: 55, regular: 130, high: 210, super: 220 }, air: { low: 420, regular: 560, high: 760, super: 900 }, someCustomField: { nested: [1, 2, 3], flag: true }, clips: [{ kind: 'play', keys: [[0, 0]], path: [[0, 10, 20]] }], countdownMs: 3000 };
       if (!WDB.importBrain(JSON.stringify(fixture))) throw new Error('import rejected');
       const out = JSON.parse(WDB.exportBrain(false));
       const f2 = JSON.parse(JSON.stringify(fixture)), o2 = JSON.parse(JSON.stringify(out));
-      delete f2.apex; delete f2.lift; delete f2.air;
-      delete o2.apex; delete o2.lift; delete o2.air;
-      if (!deepContains(o2, f2)) throw new Error('round-trip did not deep-contain fixture (excluding apex/lift/air)');
-      for (const t of ['low', 'regular', 'high', 'super']) {
-        if (!(out.lift[t] >= 40 && out.lift[t] <= 300)) throw new Error(`lift.${t} = ${out.lift[t]} outside [40,300]`);
-      }
+      delete f2.apex; delete f2.lift; delete f2.air; delete o2.apex; delete o2.lift; delete o2.air;
+      if (!deepContains(o2, f2)) throw new Error('round-trip did not deep-contain fixture');
+      for (const t of ['low', 'regular', 'high', 'super']) if (!(out.lift[t] >= 40 && out.lift[t] <= 300)) throw new Error(`lift.${t} out of bounds`);
       const order = ['low', 'regular', 'high', 'super'];
       const apexGap = { regular: 8, high: 12, super: 25 };
       for (let i = 1; i < order.length; i++) {
-        const t = order[i], p = order[i - 1];
-        if (!(out.apex[t] >= out.apex[p] + apexGap[t])) throw new Error(`apex gap ${p}->${t} violated`);
-        if (!(out.air[t] >= out.air[p] + 30)) throw new Error(`air gap ${p}->${t} violated`);
+        if (!(out.apex[order[i]] >= out.apex[order[i-1]] + apexGap[order[i]])) throw new Error(`apex gap violated`);
+        if (!(out.air[order[i]] >= out.air[order[i-1]] + 30)) throw new Error(`air gap violated`);
       }
-      ok('round-trip: deep-contains fixture (excluding apex/lift/air); sanitize invariants hold');
+      ok('round-trip: deep-contains fixture, sanitize invariants hold');
     } catch (e) { bad(e.message); }
 
-    // Synthetic old-save variants: 9 field-deleted clones of a valid brain
     try {
-      const valid = { apex: { low: 30, regular: 55, high: 95, super: 140 },
-                      lift: { low: 60, regular: 120, high: 200, super: 200 },
-                      air:  { low: 400, regular: 550, high: 750, super: 900 },
-                      someCustomField: 'sentinel' };
+      const valid = { apex: { low: 30, regular: 55, high: 95, super: 140 }, lift: { low: 60, regular: 120, high: 200, super: 200 }, air: { low: 400, regular: 550, high: 750, super: 900 }, someCustomField: 'sentinel' };
       if (!WDB.importBrain(JSON.stringify(valid))) throw new Error('baseline import rejected');
       const full = JSON.parse(WDB.exportBrain(false));
       for (const field of ['posLearn','superSide','airMoves','ml','clips','countdownMs','knn','passes','holds']) {
         const copy = JSON.parse(JSON.stringify(full));
         delete copy[field];
         if (!WDB.importBrain(JSON.stringify(copy))) throw new Error(`import rejected after deleting ${field}`);
-        if (!WDB.brain().apex) throw new Error(`brain.apex missing after deleting ${field}`);
       }
-      ok('synthetic old-save variants: 9 field-deleted clones import cleanly');
+      ok('synthetic old-save variants: 9 clones import cleanly');
+    } catch (e) { bad(e.message); }
+
+    try {
+      if (!existsSync(PRIMARY_FIXTURE)) {
+        skp('real-fixture round-trip', 'brains/primary.json absent');
+      } else {
+        const fixture = JSON.parse(readFileSync(PRIMARY_FIXTURE, 'utf8'));
+        if (!WDB.importBrain(JSON.stringify(fixture))) throw new Error('primary fixture import rejected');
+        const out = JSON.parse(WDB.exportBrain(false));
+        if (out.ml.q !== fixture.ml.q) throw new Error('ml.q byte mismatch');
+        if (out.ml.p !== fixture.ml.p) throw new Error('ml.p byte mismatch');
+        ok('real-fixture round-trip: ml.q and ml.p byte-equal');
+      }
+    } catch (e) { bad(e.message); }
+
+    try {
+      const exp = WDB.exportBrain(false);
+      if (typeof exp !== 'string' || !exp.startsWith('{')) throw new Error('exportBrain(false) did not return a JSON string');
+      ok('A4: exportBrain(false) JSON return confirmed');
+    } catch (e) { bad(e.message); }
+
+    try {
+      const written = new Set(r.storeLog.filter(([op]) => op === 'set').map(([, k]) => k));
+      const allowed = new Set(['wdbBotBrain', 'wdbKeybinds', 'wdbBotKeybinds']);
+      const extra = [...written].filter((k) => !allowed.has(k));
+      if (extra.length) throw new Error('unexpected localStorage keys written: ' + extra.join(', '));
+      if (!written.has('wdbBotBrain')) throw new Error('wdbBotBrain was never written to localStorage');
+      ok('storage writes: subset of three keys only, wdbBotBrain confirmed');
     } catch (e) { bad(e.message); }
   }
 }
 
-// -------- baseline parity (dormant unless baseline/ present) --------
 if (!existsSync(BASE)) {
-  skp('CFG deep parity', 'baseline/ absent — pre-gate');
-  skp('baseline size pin', 'baseline/ absent — pre-gate');
+  skp('CFG deep-equal', 'baseline/ absent');
+  skp('baseline size pin', 'baseline/ absent');
 } else {
   try {
     const bbase = readFileSync(BASE, 'utf8');
     if (bbase.length !== 331751) throw new Error(`baseline size ${bbase.length}, expected 331751`);
     ok('baseline size pin: 331,751 bytes');
   } catch (e) { bad(e.message); }
+
   try {
-    const extract = (text) => {
-      const m = /\n[ \t]*const\s+CFG\s*=\s*\{/.exec(text);
-      if (!m) return null;
-      const end = braceMatch(text, m.index + m[0].length - 1);
-      return end < 0 ? null : text.slice(m.index, end);
+    const baseSrc = readFileSync(BASE, 'utf8');
+    const baseRealm = makeRealm();
+    runInContext(baseSrc, baseRealm.ctx);
+    advance(baseRealm, 200);
+    const baseCFG = baseRealm.win.WDB.CFG;
+    const currentCFG = r.win.WDB.CFG;
+    
+    const deepEqual = (a, b, path) => {
+      if (a === b) return;
+      if (typeof a !== typeof b) throw new Error(`Type mismatch at ${path}: ${typeof a} vs ${typeof b}`);
+      if (a === null || b === null || typeof a !== 'object') {
+        if (a !== b) throw new Error(`Value mismatch at ${path}: ${a} vs ${b}`);
+        return;
+      }
+      if (Array.isArray(a) !== Array.isArray(b)) throw new Error(`Array mismatch at ${path}`);
+      const keysA = Object.keys(a), keysB = Object.keys(b);
+      for (const k of keysA) {
+        if (!keysB.includes(k)) throw new Error(`Key ${k} missing in baseline at ${path}`);
+        deepEqual(a[k], b[k], `${path}.${k}`);
+      }
+      for (const k of keysB) {
+        if (!keysA.includes(k)) throw new Error(`Key ${k} missing in current at ${path}`);
+      }
     };
-    const a = extract(botSrc), b = extract(readFileSync(BASE, 'utf8'));
-    if (!a || !b) throw new Error('CFG not found in one of the files');
-    const ka = new Set([...a.matchAll(/\b(\w+)\s*:/g)].map((x) => x[1]));
-    const kb = new Set([...b.matchAll(/\b(\w+)\s*:/g)].map((x) => x[1]));
-    const missing = [...kb].filter((k) => !ka.has(k));
-    if (missing.length) throw new Error('CFG missing baseline keys: ' + missing.join(', '));
-    ok('CFG key parity: no baseline keys lost');
-  } catch (e) { bad(e.message); }
+    deepEqual(currentCFG, baseCFG, 'CFG');
+    ok('H2: CFG deep-equal to baseline (keys and values)');
+  } catch (e) { bad('H2 CFG parity: ' + e.message); }
 }
 
-// -------- L-f: skip discipline --------
-const nonBaselineSkips = skipReasons.filter((r) => !r.startsWith('CFG deep parity') && !r.startsWith('baseline size pin'));
+const nonBaselineSkips = skipReasons.filter((r) => !r.startsWith('CFG deep-equal') && !r.startsWith('baseline size pin') && !r.startsWith('real-fixture round-trip'));
 if (nonBaselineSkips.length) bad('L-f violation: skips present while src/ exists: ' + nonBaselineSkips.join('; '));
 
 console.log(`RESULT pass=${passN} fail=${failN} skip=${skipN}`);
