@@ -9,7 +9,7 @@
   - Build & CI verification: GitHub Actions free tier (`ubuntu-latest`, Node.js built-ins only, zero paid services or Codespaces)
   - Runtime & manual verification: Chrome + Tampermonkey
 - **Third-Party Code Gate:** The baseline script is third-party work by GreasyFork author **Bobby Xq**. **No baseline code or derivative runtime source (`src/`, `baseline/`) enters this repository, and nothing is redistributed, until written permission is received.** Pre-gate CI runs fixture-integrity and original-script self-checks only.
-- **Toolchain Honesty:** Original build/harness/workflow files (`scripts/build.mjs`, `scripts/test-harness.mjs`, `.github/workflows/ci.yml`, `.gitignore`) use zero external bundlers and are awaiting code-level verification and their first CI run. Nothing in documentation may claim "CI green" until a real post-gate CI run passes.
+- **Toolchain Honesty:** Original build/harness/workflow files (`scripts/build.mjs`, `scripts/test-harness.mjs`, `.github/workflows/ci.yml`, `.gitignore`) use zero external bundlers and are awaiting final verification and their first CI run. Nothing in documentation may claim "CI green" until a real post-gate CI run passes.
 
 ---
 
@@ -35,6 +35,9 @@ All items below are non-negotiable Stage 0 invariants:
    - **Dead / spectating observation:** Input inference, player watchers, and ML demo collection continue running while the player is dead/spectating inside a visible match root.
    - **ML exploration schedule:** Exploration rate decays toward `0.04` with a half-life of **60,000 decisions** (decision step count, not milliseconds).
    - **Double-DQN target sync:** Target network copies weights from the online Q network every **500** gradient updates.
+6. **`exportBrain` Wrapper & Non-DOM Guard Pin:**
+   - `WDB.exportBrain` is a preserved wrapper that ignores any argument passed to it and forces the internal download flag to true; returning a JSON string in non-DOM/headless environments relies on the internal `document.body` existence guard.
+   - Consequently, keeping `document.body` as `null` in the test harness realm is a **load-bearing stub** so `WDB.exportBrain()` returns the serialized JSON string instead of attempting a browser download.
 
 ---
 
@@ -48,7 +51,7 @@ All items below are non-negotiable Stage 0 invariants:
   - `drawOverlay`: dead rendering helper with zero active call sites and not exposed on `window.WDB`; keep dead in Stage 0.
   - `showMap`: live setter, dead read path — command exists, effect does not. (Any future Stage 2+ visual map overlay must be strictly opt-in behind a new `CFG` flag.)
 - **Unused `CFG` Keys:** `aimY`, `grabIdeal`, and `maxCarryMs` have no active runtime consumers in v6.7.3 and must remain present verbatim in `CFG`.
-- **`CFG` Default Authority:** Documented values (such as `setupPlay: false`) are documentation records only. **CI deep parity against the frozen baseline file is the sole authority**—if the baseline differs on any `CFG` key or default, update documentation to match, never alter Stage 0 code.
+- **`CFG` Default Authority:** Documented values (such as `setupPlay: false`) are documentation records only. **CI dual-realm deep parity against `baseline/wdb-bot-6.7.3.user.js` is the sole authority**—if the baseline differs on any `CFG` key or default, update documentation to match, never alter Stage 0 code.
 
 ---
 
@@ -60,12 +63,12 @@ All items below are non-negotiable Stage 0 invariants:
    - Merges explicit nested fresh defaults and applies array type guards for list collections (`plays`, `defMoves`, `kickMoves`, `knn`), then runs jump sanitization.
 2. **Literal-Target Sub-object Pin:** In baseline `adoptBrain`, `superSide` and `posLearn` merge into **literal** defaults (`v` zero, `n` zero for `superSide`; `d` null, `n` zero for `posLearn`) rather than referencing the fresh brain factory's sub-objects. Adding new defaults for those two sub-objects solely in the fresh brain factory would silently drop during loading. Never add defaults to those two literal merges without a synchronized same-commit update; prefer additive top-level fields elsewhere.
 3. **Versioned Forward Evolution:** Any Stage 2+ experiment altering ML observation inputs, action sets, network sizes, or incompatible weight layouts must be gated behind an opt-in `CFG` flag and a versioned brain schema so `v1` saved brains load cleanly forever.
-4. **Owner Brain Provenance & Fixtures:**
-   - Every file in `brains/` is a real runtime export from the same script version as the baseline (**WDB Bot (practice) v6.7.3**).
+4. **Owner Brain Provenance & Manifest Bounds:**
+   - Every file in `brains/` is a real runtime export from the same script version as the baseline (**WDB Bot (practice) v6.7.3**). Real exports are **immutable** and **never retrained**.
    - Export filenames were renamed at export time and carry **no semantics**—never infer training stage or configuration from filenames.
    - Config changes during training happened via DevTools console and are stored separately from the brain object, never touching brain bytes.
-   - Duplicates and checkpoints are intentionally retained and documented in the manifest (`sha256`, `duplicate-of`, `source`, `notes`). Real exports are **primary** fixtures; `brains/synthetic/` holds **secondary** negative/edge fixtures (explicitly marked synthetic).
-   - **Never retrain owner brains.** Fixtures are owner runtime data (gate-exempt); manifest byte-size, `sha256`, and shape validation serve as a permanent CI tripwire.
+   - Duplicates and checkpoints are intentionally retained and documented in the manifest (`sha256`, `duplicate-of`, `source`, `notes`). Real exports are **primary** fixtures; `brains/synthetic/` holds **secondary** negative/edge test fixtures (explicitly marked synthetic, with `expect` fields restricted to synthetic fixtures only).
+   - Manual `workflow_dispatch` fixture regeneration is strictly limited to `brains/synthetic/` only; real exports in `brains/` are owner runtime data (gate-exempt) checked loudly by exact byte size and `sha256`.
 
 ---
 
@@ -75,15 +78,15 @@ All items below are non-negotiable Stage 0 invariants:
 - `docs/ARCHITECTURE.md` — architecture specification and engineering pins
 - `docs/FEATURE-INVENTORY.md` — complete feature contract (`INP`–`SYS`)
 - `docs/LICENSING-PLAN.md` — attribution, gate rules, and permission decision matrix
-- `brains/` — primary owner v6.7.3 runtime exports + fixture manifest
+- `brains/` — primary immutable owner v6.7.3 runtime exports + fixture manifest
 - `brains/synthetic/` — secondary negative/edge test fixtures (marked synthetic)
-- `scripts/build.mjs` — zero-dependency Node.js ordered assembler (built-ins only, no bundler)
+- `scripts/build.mjs` — zero-dependency Node.js ordered assembler (built-ins only, no bundler; sorts `src/` slices **numerically** so 10+ parts stay in exact order)
 - `scripts/test-harness.mjs` — zero-dependency Node.js fixture, purity, and replay test runner
-- `.github/workflows/ci.yml` — GitHub Actions CI pipeline
+- `.github/workflows/ci.yml` — GitHub Actions CI pipeline (runs syntax checks, build, and harness from repo root)
 - `.gitignore` — ignores `dist/` (build artifact, not committed pre-gate)
 
 ### Post-Gate Layout (Unlocked Only After Written Permission)
-- `baseline/WDB Bot (practice).user.js` — frozen read-only reference copy (`5,824` lines / `331,751` bytes)
+- `baseline/wdb-bot-6.7.3.user.js` — frozen read-only reference copy (`5,824` lines / `331,751` bytes, pure ASCII)
 - `src/` — modular ordered slices assembled inside the single outer IIFE:
   - `00-header.js` (metadata block + IIFE opening)
   - `01-config-binds.js` (`CFG`, `KEYS`, `BOT_KEYS`, binding UI & storage)
@@ -94,7 +97,7 @@ All items below are non-negotiable Stage 0 invariants:
   - `06-teaching.js` (action tape, clip cutting, context matching, replay)
   - `07-planner-rules.js` (Planner 5.0, MPC 4.0, KNN cloning, stances, legacy tactics)
   - `08-observers.js` (movement calibration, player input inference, watchers, self-review, grab clock)
-  - `09-ui-api-loop.js` (HUD panel, buttons, dead `drawOverlay`, export/import, main loop, `window.WDB`, IIFE close)
+  - `09-ui-api-loop.js` (HUD panel, buttons, dead `drawOverlay`, export/import, main loop, `window.WDB`, IIFE closing)
 - `dist/wdb-bot.user.js` — compiled installable userscript delivered via GitHub Actions artifact (gitignored in repo).
 
 ### Worker Purity Specification
@@ -106,21 +109,23 @@ All items below are non-negotiable Stage 0 invariants:
 ## 6. Six Build Laws & CI Verification Contract
 
 ### Six Build Laws (`L-a` through `L-f`)
-- **`L-a` Storage Literal Purity:** Exact storage keys (`wdbKeybinds`, `wdbBotKeybinds`, `wdbBotBrain`) must appear literally in `src/`.
+- **`L-a` Storage Literal Purity:** Exact storage keys (`wdbKeybinds`, `wdbBotKeybinds`, `wdbBotBrain`) must appear literally in `src/`, and backtick template-literal first arguments containing interpolation (`${`) on storage calls are rejected.
 - **`L-b` No Wipe Hazard:** `dist/wdb-bot.user.js` must contain zero calls to `localStorage.clear`.
 - **`L-c` Zero Sandbox Grants:** `dist/wdb-bot.user.js` must contain zero `GM_` tokens anywhere, including inside comments.
-- **`L-d` Exact File-to-Build Bijection:** The build manifest order in `scripts/build.mjs` and the file list under `src/` must match identically in both directions; any orphaned file is a build failure.
+- **`L-d` Exact File-to-Build Bijection:** The build manifest order in `scripts/build.mjs` and the file list under `src/` must match identically in both directions (compiled output equals exact ordered join of `src/` slices); any orphaned part is a build failure.
 - **`L-e` Loud Failure on Missing Patterns:** Test assertions must fail loudly if an expected pattern is absent; silently skipping or passing on missing targets is forbidden.
 - **`L-f` Strict Pre-Gate Skip Trigger:** Pre-gate dormancy is keyed **strictly and solely** on the absence of `src/` (emitting a loud `"PRE-GATE: parity dormant"` notice). Once `src/` exists, any skipped check is a hard failure.
 
-### CI Check Matrix
-- **Pre-Gate (Active Now):** Fixture-integrity checks across `brains/` and `brains/synthetic/` (exact byte size, `sha256`, schema shape, no retraining) plus original-script self-checks on `scripts/`.
-- **Post-Gate (Activates Automatically When `src/` & `baseline/` Enter Repo):**
+### CI Check Matrix & Stage-0 Entry Contract
+- **Pre-Gate (Active Now):**
+  1. `node --check scripts/*.mjs` syntax verification in CI.
+  2. Fixture-integrity checks across `brains/` and `brains/synthetic/` (exact byte size, `sha256`, manifest shape, loud fail on mismatch) plus original-script self-checks (including string/comment-aware brace-matcher self-test).
+- **Post-Gate (Activates Automatically When `src/` & `baseline/wdb-bot-6.7.3.user.js` Enter Repo):**
   1. Header & IIFE purity (`@match`, `@run-at document-start`, `@grant none`, zero `GM_*`, plain non-module IIFE).
-  2. Storage identity & `adoptBrain` contract tests (lazy-field and custom-property passthrough survival, `apex` gate including empty-`apex` pass, round-trip deep-contains and jump sanitize invariants, 9 synthetic clones, literal-target restoration check limited strictly to `superSide` and `posLearn`).
-  3. Worker-source purity in a fresh empty Node `vm` realm instantiating `mlLib` trainer `(16, 14)` and executing one Q-update and one policy-update step (plus `btoa`/`atob` Buffer stubs for Node harness completeness).
-  4. Wire-size sanity check (`32,844` bytes provisional per network; confirmed against baseline—mismatch updates the pin, not code).
-  5. Baseline file pin (`5,824` lines / `331,751` bytes) and `WDB.CFG` deep key/value parity comparing compiled output against `baseline/`.
+  2. Storage-key purity (`L-a`/`L-b`), post-runtime storage write-set assertion (written keys must be a subset of the three allowed keys, including `wdbBotBrain`), and `adoptBrain` contract tests: lazy-field presence/`typeof` survival, custom-property passthrough proof, `apex` gate including empty-`apex` pass, round-trip deep-contains excluding `apex`/`lift`/`air` with `sanitizeJumps` invariants, 9 synthetic clones, literal-target restoration asserted strictly for `superSide` and `posLearn`, plus real-fixture import-then-export proving `ml.q` and `ml.p` **byte-equality** against the fixture.
+  3. Worker-source purity using string/comment-aware `mlLib` brace extraction, evaluated in a fresh empty Node `vm` realm instantiating trainer `(16, 14)` and executing one Q-update and one policy-update step (with `btoa`/`atob` Buffer stubs and `document.body = null` preserved in the harness realm).
+  4. Wire-size sanity check (`32,844` chars provisional for both `Q` and `P` nets; confirmed against baseline—mismatch updates the pin, not code).
+  5. Exact `dist` ordered-join parity against `src/` parts (`scripts/build.mjs` numeric sort), baseline pin (`baseline/wdb-bot-6.7.3.user.js`: `5,824` lines / `331,751` bytes), and **dual-realm `WDB.CFG` deep key-and-value equality** against `baseline/wdb-bot-6.7.3.user.js` (no regex extraction).
 
 ---
 
@@ -129,7 +134,7 @@ All items below are non-negotiable Stage 0 invariants:
 One relay round per stage; the bot remains installable and functional after each post-gate stage:
 
 - **Stage 0 — Structure & Parity Build (Permission-Gated):**
-  - Commit frozen `baseline/`, split into `src/` slices, assemble `dist/wdb-bot.user.js` via `scripts/build.mjs`, pass all CI parity checks with zero behavior change, and verify live Chrome/Tampermonkey execution in a private room (`WDB.errors.count === 0`).
+  - Commit frozen `baseline/wdb-bot-6.7.3.user.js`, split into numerically ordered `src/` slices, assemble `dist/wdb-bot.user.js` via `scripts/build.mjs`, pass all CI parity checks with zero behavior change, and verify live Chrome/Tampermonkey execution in a private room (`WDB.errors.count === 0`).
 - **Stage 1 — Decision Log & Seeded Replay Harness:**
   - **Opt-in Seeded Eval Mode:** Add `CFG.evalSeed` (default `null` preserves standard `Math.random()`) routing all stochastic paths (`mlDecide`, clip selection, legacy exploration, aim jitter, fakes, stances/delays, KNN eviction, and `mlLib` init/sampling) through a deterministic PRNG; add opt-in `CFG.evalNoExplore` and deterministic clock injection for offline replay.
   - **Decision Log Ring Buffer & Explicit Export:** Bounded in-memory ring buffer (`CFG.logDecisions = false`, `CFG.logCapacity = 2000`) with **zero silent file writes** and zero `localStorage` expansion, plus an explicit **Export Log** button and `WDB.exportLog()` download helper.

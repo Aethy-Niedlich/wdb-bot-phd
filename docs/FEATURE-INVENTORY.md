@@ -1,8 +1,8 @@
 # WDB Bot v6.7.3 — Complete Feature Inventory
 
 - **Contract Authority:** Where comments and runtime code disagree, **CODE WINS**.
-- **Stage 0 Reference Target:** Frozen baseline `WDB Bot (practice).user.js` (`5,824` lines / `331,751` bytes).
-- **Default Authority Note:** Documented config defaults (such as `setupPlay: false`) are descriptive records; **CI parity against the frozen baseline is the sole authority** (if baseline differs, update documentation rather than code).
+- **Stage 0 Reference Target:** Frozen baseline `baseline/wdb-bot-6.7.3.user.js` (`5,824` lines / `331,751` bytes, pure ASCII).
+- **Default Authority Note:** Documented config defaults (such as `setupPlay: false`) are descriptive records; **CI dual-realm parity against `baseline/wdb-bot-6.7.3.user.js` is the sole authority** (if baseline differs, update documentation rather than code).
 
 ---
 
@@ -105,7 +105,7 @@
 | `RUL-06` | Rule-based defense handles `planSave`, just-over-head grabs, dropping dodges, low jump-overs, `readSpot`/`meetSpot` tracking, and `CFG.offense = false` backwall clears. |
 | `RUL-07` | Rule-based throw controller runs recorded shot replay, save-momentum quick clears, stall regrabs (`stallMs`), target choice (net vs leading moving enemy with jitter & fakes), learned `throwPower`, and teammate passing (`front`/`behind`/`above`/`below`). |
 | `RUL-08` | Teammate coordination (`teamInfo`) yields kickoffs/loose balls when a teammate holds the ball or is `> 40` units closer (`teamGap`). |
-| `RUL-09` | Unused `CFG` keys (`aimY`, `grabIdeal`, `maxCarryMs`) retained verbatim with zero runtime consumers; `setupPlay: false` parity is governed by CI against the frozen baseline. |
+| `RUL-09` | Unused `CFG` keys (`aimY`, `grabIdeal`, `maxCarryMs`) retained verbatim with zero runtime consumers; `setupPlay: false` parity is governed by CI dual-realm comparison against `baseline/wdb-bot-6.7.3.user.js`. |
 
 ---
 
@@ -132,7 +132,7 @@
 | `API-01` | `window.WDB` state properties/setters: `CFG`, `setStateProvider`, `mode`, `errors`, `ml`, `teaching`. |
 | `API-02` | `window.WDB` keybind API: `setKeys`, `setBotKeys`, `resetBotKeys`, `keys`, `resetKeys`. |
 | `API-03` | `window.WDB` teaching API: `teach`, `pressKey`, `moves`, `forgetMoves`. |
-| `API-04` | `window.WDB` brain/map/player API: `map`, `showMap` (live setter, dead read path — command exists, effect does not), `brain`, `exportBrain`, `importBrain`, `forget`, `players`, `meter`. |
+| `API-04` | `window.WDB` brain/map/player API: `map`, `showMap` (live setter, dead read path — command exists, effect does not), `brain`, `exportBrain` (wrapper ignores argument and forces download true; relies on `document.body` existence guard for non-DOM JSON string return), `importBrain`, `forget`, `players`, `meter`. |
 | `API-05` | `window.WDB` calibration/diagnostic API: `markGoal`, `markRamp`, `markWait`, `debug`, `scan` / `Scan` (async `0.5 s` motion table). |
 
 ---
