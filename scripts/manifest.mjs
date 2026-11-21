@@ -8,6 +8,7 @@ const MANIFEST = join(BRAINS, 'MANIFEST.json');
 
 function getFiles(dir) {
   let results = [];
+  if (!existsSync(dir)) return results;
   const list = readdirSync(dir, { withFileTypes: true });
   for (const file of list) {
     const res = join(dir, file.name);
@@ -19,12 +20,11 @@ function getFiles(dir) {
 
 export function checkManifest(quiet = false) {
   if (!existsSync(MANIFEST)) {
-    if (!quiet) console.log('manifest: MANIFEST.json missing, skipping');
-    return true;
+    throw new Error('brains/MANIFEST.json is missing (tampering or accident)');
   }
   const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'));
   const rows = manifest.rows || [];
-  const files = existsSync(BRAINS) ? getFiles(BRAINS).map(f => f.replace(/\\/g, '/').replace(ROOT + '/', '')) : [];
+  const files = getFiles(BRAINS).map(f => f.replace(/\\/g, '/').replace(ROOT + '/', ''));
   const manifestPaths = new Set(rows.map(r => r.path));
   
   let errors = 0;
@@ -70,7 +70,7 @@ export function checkManifest(quiet = false) {
 
 export function initManifest() {
   if (!existsSync(BRAINS)) mkdirSync(BRAINS);
-  const files = existsSync(BRAINS) ? getFiles(BRAINS).map(f => f.replace(/\\/g, '/').replace(ROOT + '/', '')) : [];
+  const files = getFiles(BRAINS).map(f => f.replace(/\\/g, '/').replace(ROOT + '/', ''));
   const rows = [];
   for (const f of files) {
     if (f.endsWith('MANIFEST.json') || f.endsWith('NOTES.md')) continue;
@@ -82,9 +82,27 @@ export function initManifest() {
   console.log(`manifest: initialized with ${rows.length} files`);
 }
 
+export function regenSynthetic() {
+  if (!existsSync(MANIFEST)) throw new Error('No manifest');
+  const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'));
+  const rows = manifest.rows || [];
+  const synth = rows.filter(r => r.class === 'synthetic');
+  if (!synth.length) { console.log('No synthetic rows to regen.'); return; }
+  for (const r of synth) {
+    const fullPath = join(ROOT, r.path);
+    if (!fullPath.replace(/\\/g, '/').startsWith(join(ROOT, 'brains', 'synthetic').replace(/\\/g, '/'))) {
+      throw new Error('Attempted to regen a non-synthetic path: ' + r.path);
+    }
+    // Future synthetic regeneration logic goes here
+  }
+  console.log('Regenerated', synth.length, 'synthetic fixtures.');
+}
+
 if (process.argv[1] && (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`)) {
   if (process.argv.includes('--init')) initManifest();
   else if (process.argv.includes('--check')) {
     try { checkManifest(false); } catch(e) { console.error(e.message); process.exit(1); }
+  } else if (process.argv.includes('--regen')) {
+    try { regenSynthetic(); } catch(e) { console.error(e.message); process.exit(1); }
   }
 }

@@ -30,16 +30,13 @@ jobs:
       - name: node --check (H1)
         run: node --check scripts/build.mjs && node --check scripts/test-harness.mjs && node --check scripts/manifest.mjs
 
-      - name: enforce NOTES.md on real-row changes
+      - name: enforce NOTES.md on manifest changes (F4)
         run: |
           if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-            CHANGED=$(git diff --name-only HEAD^ HEAD)
-            if echo "$CHANGED" | grep -q 'brains/MANIFEST.json'; then
-              if git diff HEAD^ HEAD -- brains/MANIFEST.json | grep -q '^+.*"class": "real"'; then
-                if ! echo "$CHANGED" | grep -q 'brains/NOTES.md'; then
-                  echo "ERROR: Added/changed a real manifest row without updating brains/NOTES.md"
-                  exit 1
-                fi
+            if ! git diff --quiet HEAD^ HEAD -- brains/MANIFEST.json; then
+              if ! git diff --name-only HEAD^ HEAD | grep -q 'brains/NOTES.md'; then
+                echo "ERROR: Changed brains/MANIFEST.json without updating brains/NOTES.md"
+                exit 1
               fi
             fi
           fi

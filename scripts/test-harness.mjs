@@ -1,4 +1,20 @@
 #!/usr/bin/env node
+// Original test harness — PATH C, DeepSeek. Contains no baseline code.
+//
+// Qwen v6 / v10 / GLM v3 laws implemented below:
+//   • L-a: storage keys literal/bare-identifier only
+//   • L-b: no localStorage.clear in dist
+//   • L-c: no GM_ token in dist
+//   • L-d: build-order <-> src exact both directions (observable via join)
+//   • L-e: loud failure on missing patterns
+//   • L-f: skip keyed ONLY on src/ absence; any skip once src/ exists is fail
+//   • H1: node --check (handled in ci.yml)
+//   • H2: CFG deep-equal to baseline in a FRESH realm
+//   • H3: string/comment-aware braceMatch with self-tests
+//   • H4/B3: manifest integrity check called before harness
+//   • Boundary (a): worker purity via fresh empty vm realm
+//   • btoa/atob stubs: required so mlSave doesn't silently throw
+
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { join } from 'node:path';
@@ -56,6 +72,9 @@ function makeRealm() {
     key: (i) => [...stored.keys()][i] ?? null,
   };
   win.document = {
+    // R1 (load-bearing): document.body MUST stay null in the harness realm.
+    // exportBrain(false) relies on the body guard (document.body null)
+    // to return the JSON string instead of forcing a file download.
     body: null,
     getElementById: () => null,
     createElement: () => ({ style: {}, appendChild() {}, addEventListener() {}, click() {} }),
@@ -173,7 +192,7 @@ try {
     if (na !== nb) return na - nb;
     return a.localeCompare(b);
   });
-  if (matched.length < 2) throw new Error('need >= 2 ordered parts; got ' + matched.join(', ') || '(none)');
+  if (matched.length < 2) throw new Error('need >= 2 ordered parts; got ' + matched.length + ' parts');
   const missing = matched.filter((f) => !botSrc.includes(readFileSync(join(SRC, f), 'utf8')));
   if (missing.length) throw new Error('part(s) not present in dist (build dropped them): ' + missing.join(', '));
   ok(`L-d: all ${matched.length} src part(s) present in dist, no orphans`);
@@ -221,11 +240,15 @@ else {
   else {
     ok('userscript loaded, WDB present');
 
+    // F1: Restore v2 lazy test
     try {
-      if (!WDB.importBrain(JSON.stringify({ apex: { low: 30, regular: 55, high: 95, super: 140 } }))) throw new Error('import rejected');
-      const out = JSON.parse(WDB.exportBrain(false));
-      if (!out.lift) throw new Error('adoptBrain dropped lift (lazy)');
-      ok('adoptBrain preserves lazy fields');
+      const lazy = { apex: { low: 30, regular: 55, high: 95, super: 140 }, clips: [{ kind: 'play', keys: [], path: [] }], countdownMs: 1234, ml: { q: 'AAAA', p: 'BBBB' } };
+      if (!WDB.importBrain(JSON.stringify(lazy))) throw new Error('importBrain refused a well-formed apex brain');
+      const b = WDB.brain();
+      if (!Array.isArray(b.clips) || b.clips.length !== 1) throw new Error('adoptBrain dropped clips (lazy)');
+      if (b.countdownMs !== 1234) throw new Error('adoptBrain dropped countdownMs (lazy)');
+      if (!b.ml || typeof b.ml.q !== 'string') throw new Error('adoptBrain dropped ml');
+      ok('adoptBrain preserves lazy fields (clips, countdownMs, ml)');
     } catch (e) { bad(e.message); }
 
     try {
@@ -298,24 +321,27 @@ else {
         const copy = JSON.parse(JSON.stringify(full));
         delete copy[field];
         if (!WDB.importBrain(JSON.stringify(copy))) throw new Error(`import rejected after deleting ${field}`);
+        if (!WDB.brain().apex) throw new Error(`brain.apex missing after deleting ${field}`); // F1 per-clone assertion
       }
       ok('synthetic old-save variants: 9 clones import cleanly');
     } catch (e) { bad(e.message); }
 
+    // S2: Real fixture test fails (not skips) if brains/ exists but primary.json is missing
     try {
-      if (!existsSync(PRIMARY_FIXTURE)) {
-        skp('real-fixture round-trip', 'brains/primary.json absent');
-      } else {
-        const fixture = JSON.parse(readFileSync(PRIMARY_FIXTURE, 'utf8'));
-        if (!WDB.importBrain(JSON.stringify(fixture))) throw new Error('primary fixture import rejected');
-        const out = JSON.parse(WDB.exportBrain(false));
-        if (out.ml.q !== fixture.ml.q) throw new Error('ml.q byte mismatch');
-        if (out.ml.p !== fixture.ml.p) throw new Error('ml.p byte mismatch');
-        ok('real-fixture round-trip: ml.q and ml.p byte-equal');
-      }
+      if (!existsSync(PRIMARY_FIXTURE)) throw new Error('brains/ exists but primary.json is missing');
+      const fixture = JSON.parse(readFileSync(PRIMARY_FIXTURE, 'utf8'));
+      if (!WDB.importBrain(JSON.stringify(fixture))) throw new Error('primary fixture import rejected');
+      const out = JSON.parse(WDB.exportBrain(false));
+      if (out.ml.q !== fixture.ml.q) throw new Error('ml.q byte mismatch');
+      if (out.ml.p !== fixture.ml.p) throw new Error('ml.p byte mismatch');
+      ok('real-fixture round-trip: ml.q and ml.p byte-equal');
     } catch (e) { bad(e.message); }
 
+    // F6: exportBrain wrapper facts comment
     try {
+      // The wrapper ignores its argument and forces download=true in the real UI.
+      // The JSON return exists only because the body guard trips when document.body is null (R1).
+      // The wrapper stays VERBATIM in src (arg-ignoring is preserved behavior, not a bug to fix).
       const exp = WDB.exportBrain(false);
       if (typeof exp !== 'string' || !exp.startsWith('{')) throw new Error('exportBrain(false) did not return a JSON string');
       ok('A4: exportBrain(false) JSON return confirmed');
@@ -342,13 +368,18 @@ if (!existsSync(BASE)) {
     ok('baseline size pin: 331,751 bytes');
   } catch (e) { bad(e.message); }
 
+  // S3: Fresh realm for H2
   try {
     const baseSrc = readFileSync(BASE, 'utf8');
     const baseRealm = makeRealm();
     runInContext(baseSrc, baseRealm.ctx);
     advance(baseRealm, 200);
     const baseCFG = baseRealm.win.WDB.CFG;
-    const currentCFG = r.win.WDB.CFG;
+    
+    const freshRealm = makeRealm();
+    runInContext(botSrc, freshRealm.ctx);
+    advance(freshRealm, 200);
+    const currentCFG = freshRealm.win.WDB.CFG;
     
     const deepEqual = (a, b, path) => {
       if (a === b) return;
@@ -368,11 +399,11 @@ if (!existsSync(BASE)) {
       }
     };
     deepEqual(currentCFG, baseCFG, 'CFG');
-    ok('H2: CFG deep-equal to baseline (keys and values)');
+    ok('H2: CFG deep-equal to baseline (keys and values) in fresh realm');
   } catch (e) { bad('H2 CFG parity: ' + e.message); }
 }
 
-const nonBaselineSkips = skipReasons.filter((r) => !r.startsWith('CFG deep-equal') && !r.startsWith('baseline size pin') && !r.startsWith('real-fixture round-trip'));
+const nonBaselineSkips = skipReasons.filter((r) => !r.startsWith('CFG deep-equal') && !r.startsWith('baseline size pin'));
 if (nonBaselineSkips.length) bad('L-f violation: skips present while src/ exists: ' + nonBaselineSkips.join('; '));
 
 console.log(`RESULT pass=${passN} fail=${failN} skip=${skipN}`);
