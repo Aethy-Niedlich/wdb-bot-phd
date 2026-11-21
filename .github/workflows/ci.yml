@@ -18,11 +18,13 @@ jobs:
       - name: docs pins (strict, runs only once docs/ARCHITECTURE.md exists)
         if: ${{ hashFiles('docs/ARCHITECTURE.md') != '' }}
         run: |
-          grep -q '@grant        none' docs/ARCHITECTURE.md
-          grep -q 'wdbKeybinds'   docs/ARCHITECTURE.md
-          grep -q 'wdbBotKeybinds' docs/ARCHITECTURE.md
-          grep -q 'wdbBotBrain'   docs/ARCHITECTURE.md
-          grep -q 'safetyLayer runs only on the planner/legacy brain' docs/ARCHITECTURE.md
+          echo "Checking docs/ARCHITECTURE.md for required pins..."
+          grep -Eq '@grant[[:space:]]+none' docs/ARCHITECTURE.md || (echo "FAIL: missing '@grant none'" && exit 1)
+          grep -q 'wdbKeybinds' docs/ARCHITECTURE.md || (echo "FAIL: missing 'wdbKeybinds'" && exit 1)
+          grep -q 'wdbBotKeybinds' docs/ARCHITECTURE.md || (echo "FAIL: missing 'wdbBotKeybinds'" && exit 1)
+          grep -q 'wdbBotBrain' docs/ARCHITECTURE.md || (echo "FAIL: missing 'wdbBotBrain'" && exit 1)
+          grep -q 'safetyLayer runs only on the planner/legacy brain' docs/ARCHITECTURE.md || (echo "FAIL: missing 'safetyLayer runs only on the planner/legacy brain'" && exit 1)
+          echo "All docs pins passed."
 
       - name: assemble (self-skips pre-gate)
         run: node scripts/build.mjs
