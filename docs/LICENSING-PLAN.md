@@ -7,9 +7,9 @@
 - **Repository:** `wdb-bot-phd` (strictly **PRIVATE**)
 - **Current Status:** **PERMISSION PENDING.** A written permission request has been posted to Bobby Xq on GreasyFork.
 - **Active Gate Rules:**
-  1. **Zero baseline code** and **zero derivative source files** may be committed to `wdb-bot-phd` until written permission is received.
+  1. **Zero baseline code** and **zero derivative runtime files** (`baseline/`, `src/`) may be committed to `wdb-bot-phd` until written permission is received.
   2. **Zero redistribution** (no public repository, no GreasyFork upload, no public release mirrors).
-  3. Only original team documentation, build scripts, CI configuration, and original test scaffolding may enter the repository prior to permission.
+  3. Original team documentation, build/test scripts, CI configuration, and owner runtime fixtures (`brains/`, `brains/synthetic/`, which are gate-exempt owner runtime data) may enter the repository pre-gate.
 
 ---
 
