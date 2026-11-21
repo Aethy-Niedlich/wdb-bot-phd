@@ -1,3 +1,11 @@
 {
-  "rows": []
+  "rows": [
+    {"path":"brains/Bot Brain.json","class":"real","bytes":68006,"sha256":"74c2164cac74a73b95db10f4377c4adaf00d92012343321939b01013336990b3"},
+    {"path":"brains/JohnWDB 1250.json","class":"real","bytes":1424988,"sha256":"8d59e4c2b1be0d670c2304d44ac168b1b906ef56c68f06bc3a0ff40befe0bdb5"},
+    {"path":"brains/JohnWDB 2.0 250.json","class":"real","bytes":578439,"sha256":"786a3436bb01d2e4d82e530a2a5b6fb597b0163a9d7a78ab7de1bd8822bce624"},
+    {"path":"brains/JohnWDB 2.0 550.json","class":"real","bytes":1236091,"sha256":"8d2a882a397a5e82a36c6b6b72df769c3a4a6b86793300912c07a5f98e6548ef"},
+    {"path":"brains/wdb-brain-2026-11-02 (1).json","class":"real","bytes":1902587,"sha256":"fe292f501d8d896601f2754d560485f3c5b55d5bfd3031380c952f9a2b0fbe4e"},
+    {"path":"brains/wdb-brain-2026-11-02 (2).json","class":"real","bytes":2436227,"sha256":"1097ef71b265879d29b67079f8d8af501c37dd0a64402ce033aad65bfe72a4d9"},
+    {"path":"brains/wdb-brain-2026-11-02.json","class":"real","bytes":2280177,"sha256":"fea55cd6568e234aa8c92befca2d1803db96b23c15a1b3aa1a3d52964a4378af"}
+  ]
 }
