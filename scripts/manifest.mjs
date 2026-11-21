@@ -54,7 +54,12 @@ export function checkManifest(quiet = false) {
   for (const f of files) {
     if (f === 'brains/MANIFEST.json' || f === 'brains/NOTES.md') continue;
     if (!manifestPaths.has(f)) {
-      if (!quiet) console.error(`manifest: untracked file ${f} in brains/`);
+      if (!quiet) {
+        console.error(`manifest: untracked file ${f} in brains/`);
+        const buf = readFileSync(join(ROOT, f));
+        const hash = createHash('sha256').update(buf).digest('hex');
+        console.log(`\nMANIFEST_ROW: ${JSON.stringify({ path: f, class: 'real', bytes: buf.length, sha256: hash })}\n`);
+      }
       errors++;
     }
   }
